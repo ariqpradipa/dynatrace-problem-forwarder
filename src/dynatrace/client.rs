@@ -32,38 +32,78 @@ impl DynatraceClient {
         })
     }
 
-    /// Fetch problems from Dynatrace API
+    /// Fetch problems from Dynatrace API (handles pagination automatically)
     pub async fn fetch_problems(&self) -> Result<ProblemsResponse> {
         debug!("Fetching problems from: {}", self.problems_url);
 
-        let response = self
-            .client
-            .get(&self.problems_url)
-            .header(header::AUTHORIZATION, format!("Api-Token {}", self.api_token))
-            .header(header::ACCEPT, "application/json")
-            .send()
-            .await?;
+        let mut all_problems = Vec::new();
+        let mut next_page_key: Option<String> = None;
+        let mut page_num = 1;
+        let mut last_total_count = 0;
 
-        let status = response.status();
-        
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            warn!("Dynatrace API returned error ({}): {}", status, error_text);
-            return Err(ForwarderError::Config(format!(
-                "Dynatrace API error ({}): {}",
-                status, error_text
-            )));
+        loop {
+            // Build URL with pagination key if available
+            let url = if let Some(ref page_key) = next_page_key {
+                format!("{}&nextPageKey={}", self.problems_url, page_key)
+            } else {
+                self.problems_url.clone()
+            };
+
+            debug!("Fetching page {} from Dynatrace...", page_num);
+
+            let response = self
+                .client
+                .get(&url)
+                .header(header::AUTHORIZATION, format!("Api-Token {}", self.api_token))
+                .header(header::ACCEPT, "application/json")
+                .send()
+                .await?;
+
+            let status = response.status();
+
+            if !status.is_success() {
+                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                warn!("Dynatrace API returned error ({}): {}", status, error_text);
+                return Err(ForwarderError::Config(format!(
+                    "Dynatrace API error ({}): {}",
+                    status, error_text
+                )));
+            }
+
+            let mut problems_response = response.json::<ProblemsResponse>().await?;
+
+            debug!(
+                "Fetched page {} with {} problems (page size: {})",
+                page_num,
+                problems_response.problems.len(),
+                problems_response.page_size
+            );
+
+            last_total_count = problems_response.total_count;
+            all_problems.append(&mut problems_response.problems);
+
+            // Check if there are more pages
+            if problems_response.next_page_key.is_some() {
+                next_page_key = problems_response.next_page_key;
+                page_num += 1;
+            } else {
+                break;
+            }
         }
 
-        let problems_response = response.json::<ProblemsResponse>().await?;
-        
         info!(
-            "Fetched {} problems from Dynatrace (total count: {})",
-            problems_response.problems.len(),
-            problems_response.total_count
+            "Fetched {} problems from Dynatrace across {} page(s) (total count: {})",
+            all_problems.len(),
+            page_num,
+            last_total_count
         );
 
-        Ok(problems_response)
+        Ok(ProblemsResponse {
+            total_count: last_total_count,
+            page_size: all_problems.len() as i32,
+            problems: all_problems,
+            next_page_key: None,
+        })
     }
 
     /// Test connectivity to Dynatrace API
