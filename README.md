@@ -259,6 +259,7 @@ connectors:
     timeout_seconds: 30
     retry_attempts: 3
     verify_ssl: true  # Set to false to disable SSL verification (default: true)
+    batch_mode: true  # Set to false to send each problem individually (default: true)
     headers:
       Content-Type: "application/json"
       X-API-Key: "${WEBHOOK_API_KEY}"  # Reference env var
@@ -266,7 +267,26 @@ connectors:
 
 **Configuration Options:**
 
+- `batch_mode`: (Optional, default: `true`) Controls how problems are sent to the connector:
+  - `true` (Batch Mode - Default): All new/changed problems are sent in a single HTTP request as a JSON array. More efficient for high volumes.
+  - `false` (Individual Mode): Each problem is sent in a separate HTTP request. Use this if your webhook expects individual problems.
+
 - `verify_ssl`: (Optional, default: `true`) Set to `false` to disable SSL certificate verification. Useful for testing with self-signed certificates or internal systems.
+
+**Batch Mode vs Individual Mode:**
+
+```yaml
+# Batch Mode (default) - sends array of problems in ONE request
+connectors:
+  - name: "webhook-batch"
+    batch_mode: true  # or omit (defaults to true)
+    # Payload sent: [{"problemId": "1", ...}, {"problemId": "2", ...}]
+
+# Individual Mode - sends EACH problem in SEPARATE requests
+  - name: "webhook-individual"
+    batch_mode: false
+    # Multiple requests: {"problemId": "1", ...}, then {"problemId": "2", ...}, etc.
+```
 
 **Environment Variable Substitution:**
 
@@ -293,7 +313,42 @@ RUST_LOG=dynatrace_problem_forwarder=debug ./dtpf run
 
 ## Forwarded Payload
 
-Problems are forwarded as JSON with the full Dynatrace problem structure:
+The payload format depends on the connector's `batch_mode` setting:
+
+### Batch Mode (Default - `batch_mode: true`)
+
+All new/changed problems are sent as a JSON array in a single request:
+
+```json
+[
+  {
+    "problemId": "5905480872741084184_1770697620000V2",
+    "displayId": "P-260224823",
+    "title": "Low disk space",
+    "impactLevel": "INFRASTRUCTURE",
+    "severityLevel": "RESOURCE_CONTENTION",
+    "status": "OPEN",
+    "affectedEntities": [...],
+    "impactedEntities": [...],
+    "rootCauseEntity": {...},
+    "managementZones": [...],
+    "entityTags": [...],
+    "problemFilters": [...],
+    "startTime": 1770697800000,
+    "endTime": -1
+  },
+  {
+    "problemId": "5905480872741084185_1770697620000V2",
+    "displayId": "P-260224824",
+    "title": "High CPU usage",
+    ...
+  }
+]
+```
+
+### Individual Mode (`batch_mode: false`)
+
+Each problem is sent separately as a JSON object in individual requests:
 
 ```json
 {

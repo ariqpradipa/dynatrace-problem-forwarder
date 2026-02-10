@@ -36,13 +36,13 @@ impl Connector {
     /// Forward a problem to the connector
     pub async fn forward_problem(&self, problem: &Problem) -> Result<Response> {
         let max_attempts = self.config.retry_attempts.unwrap_or(3);
-        
+
         let connector_name = self.config.name.clone();
         let url = self.config.url.clone();
         let method = self.config.method.clone();
         let headers = self.config.headers.clone();
         let client = self.client.clone();
-        
+
         let result = retry_with_backoff(
             &format!("forward to {}", connector_name),
             max_attempts,
@@ -53,9 +53,47 @@ impl Connector {
                 let headers = headers.clone();
                 let client = client.clone();
                 let problem = problem.clone();
-                
+
                 Box::pin(async move {
                     Self::send_request(&client, &url, &method, headers.as_ref(), &problem).await
+                        .map_err(|e| {
+                            ForwarderError::Connector {
+                                connector: connector_name.clone(),
+                                message: e.to_string(),
+                            }
+                        })
+                })
+            },
+        )
+        .await?;
+
+        Ok(result)
+    }
+
+    /// Forward multiple problems to the connector in a single batch request
+    pub async fn forward_problems_batch(&self, problems: &[Problem]) -> Result<Response> {
+        let max_attempts = self.config.retry_attempts.unwrap_or(3);
+
+        let connector_name = self.config.name.clone();
+        let url = self.config.url.clone();
+        let method = self.config.method.clone();
+        let headers = self.config.headers.clone();
+        let client = self.client.clone();
+        let problems = problems.to_vec();
+
+        let result = retry_with_backoff(
+            &format!("forward batch to {}", connector_name),
+            max_attempts,
+            move || {
+                let connector_name = connector_name.clone();
+                let url = url.clone();
+                let method = method.clone();
+                let headers = headers.clone();
+                let client = client.clone();
+                let problems = problems.clone();
+
+                Box::pin(async move {
+                    Self::send_batch_request(&client, &url, &method, headers.as_ref(), &problems).await
                         .map_err(|e| {
                             ForwarderError::Connector {
                                 connector: connector_name.clone(),
@@ -117,7 +155,58 @@ impl Connector {
         }
 
         debug!("Successfully forwarded problem {} (status: {})", problem.problem_id, status);
-        
+
+        Ok(response)
+    }
+
+    /// Send HTTP request with multiple problems as array payload
+    async fn send_batch_request(
+        client: &Client,
+        url: &str,
+        method: &HttpMethod,
+        headers: Option<&std::collections::HashMap<String, String>>,
+        problems: &[Problem],
+    ) -> Result<Response> {
+        debug!("Sending batch of {} problems to {}", problems.len(), url);
+
+        // Build the request
+        let mut request = match method {
+            HttpMethod::Post => client.post(url),
+            HttpMethod::Put => client.put(url),
+            HttpMethod::Patch => client.patch(url),
+            HttpMethod::Get => client.get(url),
+        };
+
+        // Add custom headers
+        if let Some(headers_map) = headers {
+            for (key, value) in headers_map {
+                request = request.header(key, value);
+            }
+        }
+
+        // Add JSON body (array of problems)
+        let payload = json!(problems);
+        request = request.json(&payload);
+
+        // Send request
+        let response = request.send().await?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            error!(
+                "Connector returned error ({}): {}",
+                status, error_text
+            );
+            return Err(ForwarderError::Connector {
+                connector: url.to_string(),
+                message: format!("HTTP {}: {}", status, error_text),
+            });
+        }
+
+        debug!("Successfully forwarded batch of {} problems (status: {})", problems.len(), status);
+
         Ok(response)
     }
 
@@ -156,5 +245,10 @@ impl Connector {
     /// Get the connector name
     pub fn name(&self) -> &str {
         &self.config.name
+    }
+
+    /// Check if connector is in batch mode
+    pub fn is_batch_mode(&self) -> bool {
+        self.config.batch_mode
     }
 }

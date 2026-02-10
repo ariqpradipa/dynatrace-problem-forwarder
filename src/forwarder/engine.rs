@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
-use futures::future::join_all;
 use crate::config::Settings;
 use crate::dynatrace::{DynatraceClient, Problem};
 use crate::forwarder::Connector;
@@ -59,25 +58,40 @@ impl ForwardingEngine {
         info!("Polling Dynatrace for problems...");
 
         let response = self.dynatrace_client.fetch_problems().await?;
-        
+
         info!("Found {} problems to process", response.problems.len());
 
         let mut new_problems = 0;
         let mut status_changes = 0;
         let mut skipped = 0;
+        let mut problems_to_forward = Vec::new();
 
+        // Collect problems that need forwarding
         for problem in response.problems {
-            match self.process_problem(&problem).await {
+            match self.check_problem(&problem).await {
                 Ok(action) => {
                     match action {
-                        ProcessAction::NewProblem => new_problems += 1,
-                        ProcessAction::StatusChange => status_changes += 1,
+                        ProcessAction::NewProblem => {
+                            new_problems += 1;
+                            problems_to_forward.push(problem);
+                        }
+                        ProcessAction::StatusChange => {
+                            status_changes += 1;
+                            problems_to_forward.push(problem);
+                        }
                         ProcessAction::Skipped => skipped += 1,
                     }
                 }
                 Err(e) => {
                     error!("Error processing problem {}: {}", problem.problem_id, e);
                 }
+            }
+        }
+
+        // Forward collected problems (batch or individual depending on connector config)
+        if !problems_to_forward.is_empty() {
+            if let Err(e) = self.forward_collected_problems(&problems_to_forward).await {
+                error!("Error forwarding problems: {}", e);
             }
         }
 
@@ -89,8 +103,8 @@ impl ForwardingEngine {
         Ok(())
     }
 
-    /// Process a single problem
-    async fn process_problem(&self, problem: &Problem) -> Result<ProcessAction> {
+    /// Check if a problem needs forwarding and update database
+    async fn check_problem(&self, problem: &Problem) -> Result<ProcessAction> {
         debug!("Processing problem: {}", problem.summary());
 
         // Check if problem exists in database
@@ -98,10 +112,9 @@ impl ForwardingEngine {
 
         match db_problem {
             None => {
-                // New problem - forward it
+                // New problem - will forward it
                 info!("New problem detected: {}", problem.summary());
-                self.forward_to_connectors(problem).await?;
-                
+
                 // Insert into database
                 let forwarded_problem = ForwardedProblem::new(
                     problem.problem_id.clone(),
@@ -110,24 +123,23 @@ impl ForwardingEngine {
                     problem.title.clone(),
                 );
                 self.database.insert_problem(&forwarded_problem).await?;
-                
+
                 Ok(ProcessAction::NewProblem)
             }
             Some(db_record) if db_record.status != problem.status.to_string() => {
-                // Status changed - forward update
+                // Status changed - will forward update
                 info!(
                     "Status change detected for {}: {} -> {}",
                     problem.problem_id,
                     db_record.status,
                     problem.status.to_string()
                 );
-                self.forward_to_connectors(problem).await?;
-                
+
                 // Update database
                 self.database
                     .update_problem_status(&problem.problem_id, &problem.status.to_string())
                     .await?;
-                
+
                 Ok(ProcessAction::StatusChange)
             }
             Some(_) => {
@@ -138,20 +150,78 @@ impl ForwardingEngine {
         }
     }
 
-    /// Forward a problem to all connectors
-    async fn forward_to_connectors(&self, problem: &Problem) -> Result<()> {
-        debug!("Forwarding problem {} to {} connectors", problem.problem_id, self.connectors.len());
+    /// Forward collected problems to all connectors (batch or individual based on connector config)
+    async fn forward_collected_problems(&self, problems: &[Problem]) -> Result<()> {
+        info!("Forwarding {} problems to connectors", problems.len());
 
-        // Forward to all connectors in parallel
-        let forward_tasks: Vec<_> = self
+        // Group connectors by batch mode
+        let (batch_connectors, individual_connectors): (Vec<_>, Vec<_>) = self
             .connectors
             .iter()
-            .map(|connector| {
+            .partition(|c| c.is_batch_mode());
+
+        let mut forward_tasks = Vec::new();
+
+        // Batch mode connectors - send all problems in one request
+        for connector in batch_connectors {
+            let connector = Arc::clone(connector);
+            let problems = problems.to_vec();
+            let database = Arc::clone(&self.database);
+
+            let task = tokio::spawn(async move {
+                let connector_name = connector.name().to_string();
+                match connector.forward_problems_batch(&problems).await {
+                    Ok(response) => {
+                        info!(
+                            "✓ Forwarded batch of {} problems to '{}' (status: {})",
+                            problems.len(),
+                            connector_name,
+                            response.status()
+                        );
+
+                        // Record success in history for each problem
+                        for problem in &problems {
+                            let history = ForwardHistory::new(
+                                problem.problem_id.clone(),
+                                connector_name.clone(),
+                                "success".to_string(),
+                                Some(response.status().as_u16() as i32),
+                                None,
+                            );
+                            let _ = database.insert_forward_history(&history).await;
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "✗ Failed to forward batch to '{}': {}",
+                            connector_name, e
+                        );
+
+                        // Record failure in history for each problem
+                        for problem in &problems {
+                            let history = ForwardHistory::new(
+                                problem.problem_id.clone(),
+                                connector_name.clone(),
+                                "failed".to_string(),
+                                None,
+                                Some(e.to_string()),
+                            );
+                            let _ = database.insert_forward_history(&history).await;
+                        }
+                    }
+                }
+            });
+            forward_tasks.push(task);
+        }
+
+        // Individual mode connectors - send each problem separately
+        for connector in individual_connectors {
+            for problem in problems {
                 let connector = Arc::clone(connector);
                 let problem = problem.clone();
                 let database = Arc::clone(&self.database);
-                
-                async move {
+
+                let task = tokio::spawn(async move {
                     let connector_name = connector.name().to_string();
                     match connector.forward_problem(&problem).await {
                         Ok(response) => {
@@ -161,7 +231,7 @@ impl ForwardingEngine {
                                 connector_name,
                                 response.status()
                             );
-                            
+
                             // Record success in history
                             let history = ForwardHistory::new(
                                 problem.problem_id.clone(),
@@ -177,7 +247,7 @@ impl ForwardingEngine {
                                 "✗ Failed to forward {} to '{}': {}",
                                 problem.problem_id, connector_name, e
                             );
-                            
+
                             // Record failure in history
                             let history = ForwardHistory::new(
                                 problem.problem_id.clone(),
@@ -189,11 +259,15 @@ impl ForwardingEngine {
                             let _ = database.insert_forward_history(&history).await;
                         }
                     }
-                }
-            })
-            .collect();
+                });
+                forward_tasks.push(task);
+            }
+        }
 
-        join_all(forward_tasks).await;
+        // Wait for all tasks to complete
+        for task in forward_tasks {
+            let _ = task.await;
+        }
 
         Ok(())
     }

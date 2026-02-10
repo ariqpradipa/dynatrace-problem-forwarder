@@ -53,6 +53,8 @@ pub struct ConnectorConfig {
     pub retry_attempts: Option<u32>,
     #[serde(default = "default_verify_ssl")]
     pub verify_ssl: bool,
+    #[serde(default = "default_batch_mode")]
+    pub batch_mode: bool,
 }
 
 fn default_method() -> HttpMethod {
@@ -60,6 +62,10 @@ fn default_method() -> HttpMethod {
 }
 
 fn default_verify_ssl() -> bool {
+    true
+}
+
+fn default_batch_mode() -> bool {
     true
 }
 
