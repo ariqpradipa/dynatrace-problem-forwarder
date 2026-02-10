@@ -89,6 +89,8 @@ DYNATRACE_API_TOKEN=dt0c01.XXXXXXXXXXXX.YYYYYYYYYYYY
 
 ### Run the Forwarder Service
 
+**Foreground (stops when terminal closes):**
+
 ```bash
 ./dtpf run --config ./config.yaml
 ```
@@ -98,6 +100,22 @@ Or using environment variable:
 ```bash
 export CONFIG_PATH=./config.yaml
 ./dtpf run
+```
+
+**Background (runs indefinitely until stopped or server restarts):**
+
+```bash
+./dtpf run --nohup --config ./config.yaml
+```
+
+This starts the service in the background and creates `dtpf.pid` and `dtpf.log` files in the same directory as your config file.
+
+### Stop Background Service
+
+Stop a background dtpf process:
+
+```bash
+./dtpf stop --config ./config.yaml
 ```
 
 ### Clear Cache
@@ -334,41 +352,127 @@ cross build --release --target x86_64-unknown-linux-gnu
    dtpf run
    ```
 
-### As a Systemd Service
+### Running in Background (Simple Method)
 
-Create `/etc/systemd/system/dtpf.service`:
+For simple deployments where you want the service to run in the background without systemd:
+
+**1. Start in background:**
+
+```bash
+./dtpf run --nohup --config ./config.yaml
+```
+
+This will:
+- ✅ Run dtpf in the background indefinitely
+- ✅ Create a PID file (`dtpf.pid`) to track the process
+- ✅ Create a log file (`dtpf.log`) for output
+- ❌ **Will NOT** survive server restarts (process stops on reboot)
+
+**2. Stop the background process:**
+
+```bash
+./dtpf stop --config ./config.yaml
+```
+
+**Note:** The background process will stop when the server restarts. For production deployments that need auto-start on boot and auto-restart on failure, use the systemd method below.
+
+### As a Systemd Service (Production)
+
+For production deployment with auto-start on boot and auto-restart on failure:
+
+**1. Create systemd service file** `/etc/systemd/system/dtpf.service`:
 
 ```ini
 [Unit]
 Description=Dynatrace Problem Forwarder
-After=network.target
+Documentation=https://github.com/your-repo/dynatrace-problem-forwarder
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=dynatrace
-Environment="DYNATRACE_API_TOKEN=your-token"
-Environment="CONFIG_PATH=/etc/dtpf/config.yaml"
+User=dtpf
+Group=dtpf
+WorkingDirectory=/opt/dtpf
+EnvironmentFile=/etc/dtpf/dtpf.env
 ExecStart=/usr/local/bin/dtpf run
 Restart=always
 RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dtpf/data
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Enable and start:
+**2. Create environment file** `/etc/dtpf/dtpf.env`:
 
 ```bash
+DYNATRACE_API_TOKEN=your-actual-token-here
+CONFIG_PATH=/opt/dtpf/config.yaml
+RUST_LOG=info
+```
+
+**3. Complete installation:**
+
+```bash
+# Create user and directories
+sudo useradd -r -s /bin/false dtpf
+sudo mkdir -p /opt/dtpf/data /etc/dtpf
+
+# Install binary and config
+sudo cp target/release/dtpf /usr/local/bin/
+sudo cp config.yaml /opt/dtpf/config.yaml
+
+# Copy and configure environment file
+sudo cp dtpf.env.example /etc/dtpf/dtpf.env
+sudo nano /etc/dtpf/dtpf.env  # Edit with your actual values
+
+# Copy systemd service file
+sudo cp dtpf.service.example /etc/systemd/system/dtpf.service
+
+# Set permissions
+sudo chown -R dtpf:dtpf /opt/dtpf
+sudo chmod 600 /etc/dtpf/dtpf.env  # Protect secrets!
+
+# Enable and start
+sudo systemctl daemon-reload
 sudo systemctl enable dtpf
 sudo systemctl start dtpf
-sudo systemctl status dtpf
 ```
 
-View logs:
+**4. Manage the service:**
 
 ```bash
+# Start/Stop/Restart
+sudo systemctl start dtpf
+sudo systemctl stop dtpf
+sudo systemctl restart dtpf
+
+# Check status
+sudo systemctl status dtpf
+
+# View logs (real-time)
 sudo journalctl -u dtpf -f
+
+# View recent logs
+sudo journalctl -u dtpf -n 100 --since today
 ```
+
+**Key Features:**
+- ✅ Auto-starts on server boot
+- ✅ Auto-restarts on crash (10 second delay)
+- ✅ Survives server restarts
+- ✅ Runs in background as systemd service
+- ✅ Logs to systemd journal
+- ✅ Secure: runs as dedicated non-root user
 
 ## Troubleshooting
 

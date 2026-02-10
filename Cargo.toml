@@ -41,3 +41,9 @@ futures = "0.3"
 
 # Environment variables
 dotenv = "0.15"
+
+# Unix process signals (Unix only)
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["signal", "process"] }
+libc = "0.2"
+

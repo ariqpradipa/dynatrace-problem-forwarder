@@ -24,7 +24,14 @@ async fn main() {
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
-        Commands::Run { config } => {
+        Commands::Run { config, nohup } => {
+            // If nohup flag is set, start in background
+            if nohup {
+                dynatrace_problem_forwarder::utils::start_background(&config)?;
+                return Ok(());
+            }
+
+            // Otherwise, run in foreground
             // Load configuration
             let settings = Settings::load(&config)?;
 
@@ -130,6 +137,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             println!("  Successful:            {}", stats.successful_forwards);
             println!("  Failed:                {}", stats.failed_forwards);
             println!();
+        }
+
+        Commands::Stop { config } => {
+            dynatrace_problem_forwarder::utils::stop_background(&config)?;
         }
     }
 

@@ -17,6 +17,10 @@ pub enum Commands {
         /// Path to configuration file
         #[arg(short, long, env = "CONFIG_PATH", default_value = "./config.yaml")]
         config: PathBuf,
+
+        /// Run in background using nohup
+        #[arg(long)]
+        nohup: bool,
     },
 
     /// Clear the cache database (re-forward all open problems)
@@ -47,6 +51,13 @@ pub enum Commands {
     /// Show current database statistics
     Stats {
         /// Path to configuration file
+        #[arg(short, long, env = "CONFIG_PATH", default_value = "./config.yaml")]
+        config: PathBuf,
+    },
+
+    /// Stop the background forwarder service
+    Stop {
+        /// Path to configuration file (used to locate PID file)
         #[arg(short, long, env = "CONFIG_PATH", default_value = "./config.yaml")]
         config: PathBuf,
     },
