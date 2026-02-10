@@ -1,0 +1,42 @@
+# Dynatrace Configuration
+dynatrace:
+  base_url: "https://dynatrace.com"
+  tenant: "xxxxx-xxxxx-xxxx-xxxx-xxxxxxxx"
+  # Optional problem selector for filtering
+  # See: https://www.dynatrace.com/support/help/dynatrace-api/environment-api/problems-v2/get-problems
+  problem_selector: 'managementZoneIds("000000"),status("open")'
+
+# Polling Configuration
+polling:
+  interval_seconds: 60
+  # Optional: limit batch size per poll
+  batch_size: 100
+
+# Database Configuration
+database:
+  path: "./data/forwarder.db"
+
+# Logging Configuration
+logging:
+  level: "info"  # trace, debug, info, warn, error
+  format: "pretty"  # json or pretty
+
+# Connector Configuration
+connectors:
+  - name: "primary-webhook"
+    url: "https://your-webhook-endpoint.com/dynatrace"
+    method: "POST"
+    timeout_seconds: 30
+    retry_attempts: 3
+    verify_ssl: true  # Set to false to disable SSL certificate verification (useful for self-signed certs)
+    headers:
+      Content-Type: "application/json"
+      # Use env var for secrets: X-API-Key: "${WEBHOOK_API_KEY}"
+
+  # Example: secondary connector
+  # - name: "secondary-slack"
+  #   url: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+  #   method: "POST"
+  #   timeout_seconds: 10
+  #   retry_attempts: 2
+  #   verify_ssl: true
