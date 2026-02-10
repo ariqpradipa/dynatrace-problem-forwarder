@@ -91,8 +91,20 @@ fn default_log_format() -> String {
 impl Settings {
     /// Load settings from a YAML file
     pub fn load(config_path: &PathBuf) -> Result<Self> {
+        // Check if config file exists
+        if !config_path.exists() {
+            return Err(ForwarderError::Config(format!(
+                "Configuration file not found: {}\n\nPlease create a config.yaml file or specify the path with --config.\nYou can use config.yaml.example as a template.",
+                config_path.display()
+            )));
+        }
+
         let config_content = std::fs::read_to_string(config_path)
-            .map_err(|e| ForwarderError::Config(format!("Failed to read config file: {}", e)))?;
+            .map_err(|e| ForwarderError::Config(format!(
+                "Failed to read config file '{}': {}",
+                config_path.display(),
+                e
+            )))?;
 
         let mut settings: Settings = serde_yaml::from_str(&config_content)?;
 

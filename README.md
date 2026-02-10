@@ -89,23 +89,33 @@ DYNATRACE_API_TOKEN=dt0c01.XXXXXXXXXXXX.YYYYYYYYYYYY
 
 ### Run the Forwarder Service
 
+**Note:** All commands use `--config ./config.yaml` by default. You can omit `--config` if your config file is named `config.yaml` in the current directory.
+
 **Foreground (stops when terminal closes):**
 
 ```bash
-./dtpf run --config ./config.yaml
+# Using default config.yaml in current directory
+./dtpf run
+
+# Or specify a different config file
+./dtpf run --config /path/to/config.yaml
 ```
 
 Or using environment variable:
 
 ```bash
-export CONFIG_PATH=./config.yaml
+export CONFIG_PATH=/path/to/config.yaml
 ./dtpf run
 ```
 
 **Background (runs indefinitely until stopped or server restarts):**
 
 ```bash
-./dtpf run --nohup --config ./config.yaml
+# Using default config.yaml
+./dtpf run --nohup
+
+# Or with custom config path
+./dtpf run --nohup --config /path/to/config.yaml
 ```
 
 This starts the service in the background and creates `dtpf.pid` and `dtpf.log` files in the same directory as your config file.
@@ -115,7 +125,11 @@ This starts the service in the background and creates `dtpf.pid` and `dtpf.log` 
 Stop a background dtpf process:
 
 ```bash
-./dtpf stop --config ./config.yaml
+# If using default config.yaml location
+./dtpf stop
+
+# Or with custom config path
+./dtpf stop --config /path/to/config.yaml
 ```
 
 ### Clear Cache
@@ -123,10 +137,12 @@ Stop a background dtpf process:
 Clear all cached problems (forces re-forwarding of all open problems on next poll):
 
 ```bash
+# With confirmation prompt
+./dtpf clear-cache
+
+# Skip confirmation prompt
 ./dtpf clear-cache --confirm
 ```
-
-Without `--confirm`, you'll be prompted for confirmation.
 
 ### Test Dynatrace Connectivity
 
