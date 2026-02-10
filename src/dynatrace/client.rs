@@ -33,13 +33,15 @@ impl DynatraceClient {
     }
 
     /// Fetch problems from Dynatrace API (handles pagination automatically)
+    #[allow(unused_assignments)]
     pub async fn fetch_problems(&self) -> Result<ProblemsResponse> {
         debug!("Fetching problems from: {}", self.problems_url);
 
         let mut all_problems = Vec::new();
         let mut next_page_key: Option<String> = None;
         let mut page_num = 1;
-        let mut last_total_count = 0;
+        // Initialize to 0, will be set from API response on first iteration
+        let mut total_count = 0;
 
         loop {
             // Build URL with pagination key if available
@@ -79,7 +81,7 @@ impl DynatraceClient {
                 problems_response.page_size
             );
 
-            last_total_count = problems_response.total_count;
+            total_count = problems_response.total_count;
             all_problems.append(&mut problems_response.problems);
 
             // Check if there are more pages
@@ -95,11 +97,11 @@ impl DynatraceClient {
             "Fetched {} problems from Dynatrace across {} page(s) (total count: {})",
             all_problems.len(),
             page_num,
-            last_total_count
+            total_count
         );
 
         Ok(ProblemsResponse {
-            total_count: last_total_count,
+            total_count,
             page_size: all_problems.len() as i32,
             problems: all_problems,
             next_page_key: None,
